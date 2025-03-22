@@ -61,7 +61,8 @@ local ENEMY_NAMES = {
 
 -- List of entities to avoid targeting with aimbot
 local AVOID_AIMBOT_ON = {
-    "horse", "unicorn", "mount", "vehicle", "dead", "corpse"
+    "horse", "unicorn", "mount", "vehicle", "dead", "corpse", 
+    "wagon", "cart", "carriage", "coach", "saddle", "steed", "pony"
 }
 
 -- Storage for highlighted items
@@ -240,12 +241,14 @@ local function shouldAvoidAimbot(item)
     -- Check if it's in the avoid list
     for _, avoidName in ipairs(AVOID_AIMBOT_ON) do
         if name:find(avoidName) then
+            debugPrint("Avoided aimbotting at: " .. name .. " (matched with " .. avoidName .. ")")
             return true
         end
     end
     
     -- Check if it's another player
     if item:IsA("Model") and Players:GetPlayerFromCharacter(item) then
+        debugPrint("Avoided aimbotting at player character")
         return true
     end
     
@@ -253,7 +256,25 @@ local function shouldAvoidAimbot(item)
     if item:IsA("Model") then
         local humanoid = item:FindFirstChildOfClass("Humanoid")
         if humanoid and humanoid.Health <= 0 then
+            debugPrint("Avoided aimbotting at dead entity with 0 health")
             return true
+        end
+        
+        -- Additional check for riding animations or rider properties
+        if humanoid and (humanoid:GetState() == Enum.HumanoidStateType.Riding) then
+            debugPrint("Avoided aimbotting at entity in riding state")
+            return true
+        end
+    end
+    
+    -- Check parent for horse-related names (for mounted riders)
+    if item.Parent and typeof(item.Parent) == "Instance" then
+        local parentName = item.Parent.Name:lower()
+        for _, avoidName in ipairs(AVOID_AIMBOT_ON) do
+            if parentName:find(avoidName) then
+                debugPrint("Avoided aimbotting at entity on " .. parentName)
+                return true
+            end
         end
     end
     
