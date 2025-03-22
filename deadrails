@@ -21,6 +21,7 @@ local PLAYER_HIGHLIGHT_COLOR = Color3.fromRGB(0, 255, 0) -- Green for other play
 local MAX_DISTANCE = 1000 -- Maximum distance to highlight items
 local CAMERA_TRANSITION_TIME = 0.05 -- Faster camera transition for aimbot
 local TARGET_KEY = Enum.KeyCode.Q -- Key to hold for aimbot
+local TARGET_KEY_ALT = "Q" -- Alternative string representation for key checks
 local TEXT_SIZE = 18 -- Larger text size
 
 -- List of valuable item names (exact names, ignoring case and spaces)
@@ -786,8 +787,7 @@ local function setupInputHandling()
     
     -- Multi-method approach to handle input to increase reliability
     local beginConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
-        
+        -- Don't return if gameProcessed is true, as we want to capture all Q presses
         if input.KeyCode == TARGET_KEY then
             targetingEnabled = true
             _G.lastInputCheck = tick()
@@ -796,8 +796,7 @@ local function setupInputHandling()
     end)
     
     local endConnection = UserInputService.InputEnded:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
-        
+        -- Don't return if gameProcessed is true, as we want to capture all Q releases
         if input.KeyCode == TARGET_KEY then
             targetingEnabled = false
             currentTarget = nil
@@ -808,8 +807,7 @@ local function setupInputHandling()
     
     -- Additional UIS events for redundancy
     local changed = UserInputService.InputChanged:Connect(function(input, gameProcessed)
-        if gameProcessed then return end
-        
+        -- Don't return if gameProcessed is true
         if input.KeyCode == TARGET_KEY then
             local isDown = input.UserInputState == Enum.UserInputState.Begin
             if isDown ~= targetingEnabled then
@@ -824,16 +822,14 @@ local function setupInputHandling()
     -- Backup check function
     local function checkKeyState()
         while true do
-            wait(0.1) -- Check frequently
+            wait(0.05) -- Check more frequently
             
-            -- Only use this as a backup if our normal input handling hasn't fired recently
-            if tick() - _G.lastInputCheck > 0.5 then
-                local isDown = UserInputService:IsKeyDown(TARGET_KEY)
-                if isDown ~= targetingEnabled then
-                    targetingEnabled = isDown
-                    if not isDown then currentTarget = nil end
-                    debugPrint("Aimbot " .. (isDown and "enabled" or "disabled") .. " - Q key " .. (isDown and "pressed" or "released") .. " (Backup Check)")
-                end
+            -- Always use this check regardless of when normal input handling fired
+            local isDown = UserInputService:IsKeyDown(TARGET_KEY)
+            if isDown ~= targetingEnabled then
+                targetingEnabled = isDown
+                if not isDown then currentTarget = nil end
+                debugPrint("Aimbot " .. (isDown and "enabled" or "disabled") .. " - Q key " .. (isDown and "pressed" or "released") .. " (Backup Check)")
             end
         end
     end
@@ -844,6 +840,9 @@ local function setupInputHandling()
     
     -- Start the backup check thread
     spawn(checkKeyState)
+    
+    -- Create and bind a key object that we can check directly
+    _G.targetKey = TARGET_KEY
     
     debugPrint("Enhanced input handling set up successfully")
 end
@@ -872,13 +871,29 @@ setupInputHandling()
 -- sometimes Roblox input events can be unreliable
 RunService.Heartbeat:Connect(function()
     local success, error = pcall(function()
-        -- Manual check for key press as a backup (higher priority version)
+        -- Multiple checks for key press as a backup (force check regardless of previous state)
+        -- Method 1: Direct IsKeyDown check
         local isKeyDown = UserInputService:IsKeyDown(TARGET_KEY)
-        if isKeyDown ~= targetingEnabled then
-            targetingEnabled = isKeyDown
-            if not isKeyDown then currentTarget = nil end
-            debugPrint("Aimbot " .. (isKeyDown and "enabled" or "disabled") .. " via Heartbeat key check")
+        
+        -- Method 2: Check using GetKeysPressed
+        local isPressed = false
+        local keys = UserInputService:GetKeysPressed()
+        for _, key in pairs(keys) do
+            if key.KeyCode == TARGET_KEY then
+                isPressed = true
+                break
+            end
         end
+        
+        -- Method 3: Check keyboard state directly with alternate string key representation
+        local keyboardState = UserInputService.KeyboardEnabled and UserInputService:IsKeyDown(TARGET_KEY)
+        
+        -- Use all methods to determine if key is pressed
+        local finalKeyState = isKeyDown or isPressed or keyboardState
+        
+        -- Always update the targeting state, don't skip if the state is the same
+        targetingEnabled = finalKeyState
+        if not finalKeyState then currentTarget = nil end
         
         scanItems()
         updateNearestItemsUI(ui)
@@ -908,6 +923,13 @@ spawn(function()
             if #_G.inputConnections < 3 then
                 debugPrint("Input connections lost, recreating...")
                 setupInputHandling()
+            end
+            
+            -- Force check the key state directly
+            local isKeyDown = UserInputService:IsKeyDown(TARGET_KEY)
+            if isKeyDown and not targetingEnabled then
+                targetingEnabled = true
+                debugPrint("Fixed targeting state via periodic check")
             end
         end)
     end
