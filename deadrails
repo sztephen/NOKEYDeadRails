@@ -50,7 +50,7 @@ local ENEMY_NAMES = {
     -- Common enemy types
     "zombie", "fast zombie", "armed zombie", "scientist zombie", "zombie banker",
     "outlaw", "horseback outlaw", "vampire", "wolf", "werewolf",
-    "captain prescott", "nikola tesla", "corpse", "walker", "rifle outlaw"-- Added walker
+    "captain prescott", "nikola tesla", "corpse", "walker", "rifle outlaw",  -- Added comma
     
     -- Additional matching patterns
     "npc", "enemy", "monster", "hostile", "bandit", "undead",
@@ -262,34 +262,45 @@ end
 
 -- Check if there's a clear line of sight to the target
 local function hasLineOfSight(startPos, endPos, ignoreList)
-    -- Parameters for the raycast
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-    raycastParams.FilterDescendantsInstances = ignoreList or {}
+    -- Wrap in pcall for safety
+    local success, result = pcall(function()
+        -- Parameters for the raycast
+        local raycastParams = RaycastParams.new()
+        raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+        raycastParams.FilterDescendantsInstances = ignoreList or {}
+        
+        -- Calculate ray direction
+        local direction = (endPos - startPos).Unit
+        local distance = (endPos - startPos).Magnitude
+        
+        -- Perform the raycast
+        local raycastResult = workspace:Raycast(startPos, direction * distance, raycastParams)
+        
+        -- If raycast hit nothing, there's a clear line of sight
+        if raycastResult == nil then
+            return true
+        end
+        
+        -- Check the distance to where the ray hit
+        local hitDistance = (raycastResult.Position - startPos).Magnitude
+        
+        -- If the hit point is very close to the endpoint, we consider it a line of sight
+        -- This accounts for hitting the target's collision box
+        if math.abs(hitDistance - distance) < 2 then
+            return true
+        end
+        
+        -- Otherwise, something is blocking the view
+        return false
+    end)
     
-    -- Calculate ray direction
-    local direction = (endPos - startPos).Unit
-    local distance = (endPos - startPos).Magnitude
-    
-    -- Perform the raycast
-    local raycastResult = workspace:Raycast(startPos, direction * distance, raycastParams)
-    
-    -- If raycast hit nothing, there's a clear line of sight
-    if raycastResult == nil then
+    -- If there was an error, default to true to prevent breaking functionality
+    if not success then
+        debugPrint("Line of sight check failed: " .. tostring(result))
         return true
     end
     
-    -- Check the distance to where the ray hit
-    local hitDistance = (raycastResult.Position - startPos).Magnitude
-    
-    -- If the hit point is very close to the endpoint, we consider it a line of sight
-    -- This accounts for hitting the target's collision box
-    if math.abs(hitDistance - distance) < 2 then
-        return true
-    end
-    
-    -- Otherwise, something is blocking the view
-    return false
+    return result
 end
 
 -- Find nearest enemy's head
@@ -570,7 +581,7 @@ local function createNearestItemsUI()
     aimbotLabel.BorderSizePixel = 2
     aimbotLabel.BorderColor3 = Color3.fromRGB(255, 255, 255)
     aimbotLabel.Font = Enum.Font.SourceSansBold
-    aimbotLabel.TextSize = 24 -- Larger text
+    aimbotLabel.TextSize = 24 -- Larger texta
     aimbotLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
     aimbotLabel.Text = "Aimbot: OFF"
     aimbotLabel.Parent = mainFrame
@@ -690,8 +701,14 @@ end)
 
 -- Main update loop for highlighting items and updating UI
 RunService.Heartbeat:Connect(function()
-    pcall(scanItems)
-    pcall(updateNearestItemsUI, ui)
+    local success, error = pcall(function()
+        scanItems()
+        updateNearestItemsUI(ui)
+    end)
+    
+    if not success then
+        debugPrint("Error in update loop: " .. tostring(error))
+    end
 end)
 
 -- Clean up highlights when items are removed
