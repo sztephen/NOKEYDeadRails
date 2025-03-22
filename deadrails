@@ -595,7 +595,7 @@ local function createNearestItemsUI()
     -- Create the main frame
     local mainFrame = Instance.new("Frame")
     mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 380, 0, 370) -- Taller to accommodate players section
+    mainFrame.Size = UDim2.new(0, 380, 0, 300) -- Reduced height (removed players section)
     mainFrame.Position = UDim2.new(0, 10, 0, 10)
     mainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     mainFrame.BackgroundTransparency = 0.2 -- More opaque background
@@ -681,43 +681,11 @@ local function createNearestItemsUI()
         enemyLabel.Parent = mainFrame
     end
     
-    -- Create players section label
-    local playersLabel = Instance.new("TextLabel")
-    playersLabel.Name = "PlayersLabel"
-    playersLabel.Size = UDim2.new(1, 0, 0, 35)
-    playersLabel.Position = UDim2.new(0, 0, 0, 295)
-    playersLabel.BackgroundColor3 = Color3.fromRGB(0, 180, 0) -- Green for players
-    playersLabel.BackgroundTransparency = 0.1
-    playersLabel.BorderSizePixel = 0
-    playersLabel.Font = Enum.Font.SourceSansBold
-    playersLabel.TextSize = 20 -- Larger text
-    playersLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    playersLabel.Text = "Other Players"
-    playersLabel.Parent = mainFrame
-    
-    -- Create labels for the nearest players
-    for i = 1, 3 do
-        local playerLabel = Instance.new("TextLabel")
-        playerLabel.Name = "Player" .. i
-        playerLabel.Size = UDim2.new(1, 0, 0, 30) -- Taller
-        playerLabel.Position = UDim2.new(0, 0, 0, 330 + (i - 1) * 30)
-        playerLabel.BackgroundTransparency = 0.7
-        playerLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-        playerLabel.Font = Enum.Font.SourceSansBold
-        playerLabel.TextSize = 19 -- Larger text
-        playerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-        playerLabel.TextXAlignment = Enum.TextXAlignment.Left
-        playerLabel.Text = "  " .. i .. ". No players nearby"
-        playerLabel.TextStrokeTransparency = 0.7 -- Add text stroke for better visibility
-        playerLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-        playerLabel.Parent = mainFrame
-    end
-    
     -- Create aimbot status label
     local aimbotLabel = Instance.new("TextLabel")
     aimbotLabel.Name = "AimbotStatus"
     aimbotLabel.Size = UDim2.new(1, 0, 0, 35)
-    aimbotLabel.Position = UDim2.new(0, 0, 0, 425) -- Adjusted position
+    aimbotLabel.Position = UDim2.new(0, 0, 0, 265) -- Adjusted position
     aimbotLabel.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
     aimbotLabel.BackgroundTransparency = 0.1 -- More opaque
     aimbotLabel.BorderSizePixel = 2
@@ -737,9 +705,6 @@ local function createNearestItemsUI()
         enemy1 = mainFrame.Enemy1,
         enemy2 = mainFrame.Enemy2,
         enemy3 = mainFrame.Enemy3,
-        player1 = mainFrame.Player1,
-        player2 = mainFrame.Player2,
-        player3 = mainFrame.Player3,
         aimbotStatus = mainFrame.AimbotStatus
     }
 end
@@ -791,20 +756,6 @@ local function updateNearestItemsUI(ui)
         end
     end
     
-    -- Update player items
-    for i = 1, 3 do
-        if nearestItems.players[i] then
-            local item = nearestItems.players[i]
-            local distanceRounded = math.floor(item.distance * 10) / 10
-            
-            ui["player" .. i].Text = "  " .. i .. ". " .. item.name .. " (" .. distanceRounded .. " studs)"
-            ui["player" .. i].TextColor3 = Color3.fromRGB(80, 255, 80) -- Bright green for players
-        else
-            ui["player" .. i].Text = "  " .. i .. ". No players nearby"
-            ui["player" .. i].TextColor3 = Color3.fromRGB(220, 220, 220) -- Brighter text for better visibility
-        end
-    end
-    
     if targetingEnabled then
         local targetText = "Aimbot: ON"
         if currentTarget then
@@ -826,18 +777,21 @@ local function setupInputHandling()
     -- Clear any existing connections
     if _G.inputConnections then
         for _, connection in pairs(_G.inputConnections) do
-            connection:Disconnect()
+            pcall(function() connection:Disconnect() end)
         end
     end
     
     _G.inputConnections = {}
+    _G.lastInputCheck = tick()
     
+    -- Multi-method approach to handle input to increase reliability
     local beginConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if gameProcessed then return end
         
         if input.KeyCode == TARGET_KEY then
             targetingEnabled = true
-            debugPrint("Aimbot enabled - Q key pressed")
+            _G.lastInputCheck = tick()
+            debugPrint("Aimbot enabled - Q key pressed (InputBegan)")
         end
     end)
     
@@ -847,14 +801,51 @@ local function setupInputHandling()
         if input.KeyCode == TARGET_KEY then
             targetingEnabled = false
             currentTarget = nil
-            debugPrint("Aimbot disabled - Q key released")
+            _G.lastInputCheck = tick()
+            debugPrint("Aimbot disabled - Q key released (InputEnded)")
         end
     end)
     
+    -- Additional UIS events for redundancy
+    local changed = UserInputService.InputChanged:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        if input.KeyCode == TARGET_KEY then
+            local isDown = input.UserInputState == Enum.UserInputState.Begin
+            if isDown ~= targetingEnabled then
+                targetingEnabled = isDown
+                if not isDown then currentTarget = nil end
+                _G.lastInputCheck = tick()
+                debugPrint("Aimbot " .. (isDown and "enabled" or "disabled") .. " - Q key " .. (isDown and "pressed" or "released") .. " (InputChanged)")
+            end
+        end
+    end)
+    
+    -- Backup check function
+    local function checkKeyState()
+        while true do
+            wait(0.1) -- Check frequently
+            
+            -- Only use this as a backup if our normal input handling hasn't fired recently
+            if tick() - _G.lastInputCheck > 0.5 then
+                local isDown = UserInputService:IsKeyDown(TARGET_KEY)
+                if isDown ~= targetingEnabled then
+                    targetingEnabled = isDown
+                    if not isDown then currentTarget = nil end
+                    debugPrint("Aimbot " .. (isDown and "enabled" or "disabled") .. " - Q key " .. (isDown and "pressed" or "released") .. " (Backup Check)")
+                end
+            end
+        end
+    end
+    
     table.insert(_G.inputConnections, beginConnection)
     table.insert(_G.inputConnections, endConnection)
+    table.insert(_G.inputConnections, changed)
     
-    debugPrint("Input handling set up successfully")
+    -- Start the backup check thread
+    spawn(checkKeyState)
+    
+    debugPrint("Enhanced input handling set up successfully")
 end
 
 -- Wait for player to load
@@ -881,14 +872,12 @@ setupInputHandling()
 -- sometimes Roblox input events can be unreliable
 RunService.Heartbeat:Connect(function()
     local success, error = pcall(function()
-        -- Manual check for key press as a backup
-        if UserInputService:IsKeyDown(TARGET_KEY) and not targetingEnabled then
-            targetingEnabled = true
-            debugPrint("Aimbot enabled via manual key check")
-        elseif not UserInputService:IsKeyDown(TARGET_KEY) and targetingEnabled then
-            targetingEnabled = false
-            currentTarget = nil
-            debugPrint("Aimbot disabled via manual key check")
+        -- Manual check for key press as a backup (higher priority version)
+        local isKeyDown = UserInputService:IsKeyDown(TARGET_KEY)
+        if isKeyDown ~= targetingEnabled then
+            targetingEnabled = isKeyDown
+            if not isKeyDown then currentTarget = nil end
+            debugPrint("Aimbot " .. (isKeyDown and "enabled" or "disabled") .. " via Heartbeat key check")
         end
         
         scanItems()
@@ -912,11 +901,11 @@ game.DescendantRemoving:Connect(function(instance)
     end
 end)
 
--- Check input setup every 10 seconds as a failsafe
+-- Check input setup every 5 seconds as a failsafe (decreased from 10 for faster recovery)
 spawn(function()
-    while wait(10) do
+    while wait(5) do
         pcall(function()
-            if #_G.inputConnections < 2 then
+            if #_G.inputConnections < 3 then
                 debugPrint("Input connections lost, recreating...")
                 setupInputHandling()
             end
