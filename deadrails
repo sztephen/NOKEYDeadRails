@@ -17,6 +17,7 @@ debugPrint("Script started")
 -- Configuration
 local VALUABLE_HIGHLIGHT_COLOR = Color3.fromRGB(255, 0, 0) -- Red for valuables
 local ENEMY_HIGHLIGHT_COLOR = Color3.fromRGB(0, 0, 255) -- Blue for enemies
+local PLAYER_HIGHLIGHT_COLOR = Color3.fromRGB(0, 255, 0) -- Green for other players
 local MAX_DISTANCE = 1000 -- Maximum distance to highlight items
 local CAMERA_TRANSITION_TIME = 0.05 -- Faster camera transition for aimbot
 local TARGET_KEY = Enum.KeyCode.Q -- Key to hold for aimbot
@@ -62,7 +63,7 @@ local ENEMY_NAMES = {
 -- List of entities to avoid targeting with aimbot
 local AVOID_AIMBOT_ON = {
     "horse", "unicorn", "mount", "vehicle", "dead", "corpse", 
-    "wagon", "cart", "carriage", "coach", "saddle", "steed", "pony"
+    "wagon", "cart", "carriage", "coach", "saddle", "steed", "pony", "Horse"
 }
 
 -- Storage for highlighted items
@@ -141,12 +142,20 @@ local function isEnemy(itemName)
 end
 
 -- Create highlight for an item
-local function highlightItem(item, isEnemyItem)
+local function highlightItem(item, isEnemyItem, isPlayer)
     if highlightedItems[item] then return end
     
     local highlight = Instance.new("Highlight")
-    highlight.FillColor = isEnemyItem and ENEMY_HIGHLIGHT_COLOR or VALUABLE_HIGHLIGHT_COLOR
-    highlight.OutlineColor = isEnemyItem and ENEMY_HIGHLIGHT_COLOR or VALUABLE_HIGHLIGHT_COLOR
+    
+    -- Choose color based on item type
+    if isPlayer then
+        highlight.FillColor = PLAYER_HIGHLIGHT_COLOR
+        highlight.OutlineColor = PLAYER_HIGHLIGHT_COLOR
+    else
+        highlight.FillColor = isEnemyItem and ENEMY_HIGHLIGHT_COLOR or VALUABLE_HIGHLIGHT_COLOR
+        highlight.OutlineColor = isEnemyItem and ENEMY_HIGHLIGHT_COLOR or VALUABLE_HIGHLIGHT_COLOR
+    end
+    
     highlight.FillTransparency = 1 -- Transparent fill (border only)
     highlight.OutlineTransparency = 0 -- Solid border
     highlight.Adornee = item
@@ -173,6 +182,14 @@ local function highlightItem(item, isEnemyItem)
         displayName = displayName:gsub("[Ww][Aa][Ll][Kk][Ee][Rr]", "Zombie")
     end
     
+    -- For players, try to get their actual player name
+    if isPlayer then
+        local player = Players:GetPlayerFromCharacter(item)
+        if player then
+            displayName = player.Name
+        end
+    end
+    
     nameLabel.Text = displayName
     nameLabel.Parent = billboardGui
     
@@ -182,10 +199,12 @@ local function highlightItem(item, isEnemyItem)
         highlight = highlight,
         billboardGui = billboardGui,
         isEnemy = isEnemyItem,
+        isPlayer = isPlayer,
         displayName = displayName
     }
     
-    debugPrint("Highlighted: " .. displayName .. (isEnemyItem and " (Enemy)" or " (Valuable)"))
+    local highlightType = isPlayer and " (Player)" or (isEnemyItem and " (Enemy)" or " (Valuable)")
+    debugPrint("Highlighted: " .. displayName .. highlightType)
 end
 
 -- Remove highlight from an item
@@ -236,6 +255,12 @@ end
 local function shouldAvoidAimbot(item)
     if not item then return true end
     
+    -- Check for exact match first (higher priority)
+    if item.Name == "Horse" then
+        debugPrint("Avoided aimbotting at exact horse match: " .. item.Name)
+        return true
+    end
+    
     local name = item.Name:lower()
     
     -- Check if it's in the avoid list
@@ -265,6 +290,12 @@ local function shouldAvoidAimbot(item)
             debugPrint("Avoided aimbotting at entity in riding state")
             return true
         end
+        
+        -- Check if it has a saddle part (indicating it's a horse)
+        if item:FindFirstChild("Saddle") then
+            debugPrint("Avoided aimbotting at entity with a saddle")
+            return true
+        end
     end
     
     -- Check parent for horse-related names (for mounted riders)
@@ -276,6 +307,40 @@ local function shouldAvoidAimbot(item)
                 return true
             end
         end
+        
+        -- Explicit check for parent being a horse
+        if item.Parent.Name == "Horse" then
+            debugPrint("Avoided aimbotting at entity on exact horse match")
+            return true
+        end
+    end
+    
+    -- Check if this entity is a child of a horse or related to a horse
+    local function hasHorseInAncestry(obj, depth)
+        depth = depth or 0
+        if depth > 3 then return false end -- Limit recursion depth
+        
+        if not obj or not obj.Parent then return false end
+        
+        -- Check direct parent
+        if obj.Parent.Name == "Horse" or string.find(obj.Parent.Name:lower(), "horse") then
+            return true
+        end
+        
+        -- Check for saddle in siblings
+        for _, sibling in ipairs(obj.Parent:GetChildren()) do
+            if sibling.Name == "Saddle" or string.find(sibling.Name:lower(), "saddle") then
+                return true
+            end
+        end
+        
+        -- Continue checking up the hierarchy
+        return hasHorseInAncestry(obj.Parent, depth + 1)
+    end
+    
+    if hasHorseInAncestry(item) then
+        debugPrint("Avoided aimbotting at entity with horse in ancestry")
+        return true
     end
     
     return false
@@ -405,28 +470,40 @@ local function scanItems()
         workspace:FindFirstChild("Walkers") -- Added explicit check for Walkers folder
     }
     
+    -- First, highlight other players
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character then
+            highlightItem(player.Character, false, true) -- Not an enemy, but a player
+        end
+    end
+    
     -- Scan all specified places
     for _, place in ipairs(placesToCheck) do
         if place then
             -- First check direct children
             for _, item in ipairs(place:GetChildren()) do
-                -- Skip terrain and actual players
+                -- Skip terrain and already highlighted players
                 if item == workspace.Terrain then continue end
-                if item:IsA("Model") and Players:GetPlayerFromCharacter(item) then continue end
+                if item:IsA("Model") and Players:GetPlayerFromCharacter(item) and highlightedItems[item] then continue end
                 
-                -- Check if item is valuable or enemy
-                if isValuable(item.Name) then
-                    highlightItem(item, false) -- not an enemy
+                -- Check if it's a player character
+                if item:IsA("Model") and Players:GetPlayerFromCharacter(item) then
+                    if not highlightedItems[item] then
+                        highlightItem(item, false, true) -- Not an enemy, but a player
+                    end
+                -- Check if item is valuable or enemy    
+                elseif isValuable(item.Name) then
+                    highlightItem(item, false, false) -- not an enemy, not a player
                 elseif isEnemy(item.Name) or (item:IsA("Model") and item:FindFirstChildOfClass("Humanoid")) then
-                    highlightItem(item, true) -- is an enemy
+                    highlightItem(item, true, false) -- is an enemy, not a player
                 end
                 
                 -- Also check direct children
                 for _, child in ipairs(item:GetChildren()) do
                     if isValuable(child.Name) then
-                        highlightItem(child, false)
+                        highlightItem(child, false, false)
                     elseif isEnemy(child.Name) then
-                        highlightItem(child, true)
+                        highlightItem(child, true, false)
                     end
                 end
             end
@@ -435,12 +512,15 @@ local function scanItems()
     
     -- Special check for models with humanoids (likely characters/NPCs)
     for _, model in ipairs(workspace:GetDescendants()) do
-        if model:IsA("Model") and not Players:GetPlayerFromCharacter(model) then
-            -- Check if it's an NPC/enemy by looking for a humanoid
-            if model:FindFirstChildOfClass("Humanoid") and not highlightedItems[model] then
+        if model:IsA("Model") and not highlightedItems[model] then
+            -- First check if it's a player
+            if Players:GetPlayerFromCharacter(model) then
+                highlightItem(model, false, true) -- Not an enemy, but a player
+            -- Then check if it's an enemy
+            elseif model:FindFirstChildOfClass("Humanoid") then
                 -- Check if it also has a head (for aimbot targeting)
                 if model:FindFirstChild("Head") then
-                    highlightItem(model, true) -- Consider it an enemy
+                    highlightItem(model, true, false) -- Consider it an enemy, not a player
                 end
             end
         end
@@ -449,6 +529,7 @@ local function scanItems()
     -- Update nearest items list
     local nearestValuables = {}
     local nearestEnemies = {}
+    local nearestPlayers = {} -- New list for players
     
     for item, data in pairs(highlightedItems) do
         local distance = getDistanceToItem(item)
@@ -462,10 +543,13 @@ local function scanItems()
             name = data.displayName or item.Name,
             distance = distance,
             item = item,
-            isEnemy = data.isEnemy
+            isEnemy = data.isEnemy,
+            isPlayer = data.isPlayer
         }
         
-        if data.isEnemy then
+        if data.isPlayer then
+            table.insert(nearestPlayers, itemInfo)
+        elseif data.isEnemy then
             table.insert(nearestEnemies, itemInfo)
         else
             table.insert(nearestValuables, itemInfo)
@@ -481,10 +565,15 @@ local function scanItems()
         return a.distance < b.distance
     end)
     
+    table.sort(nearestPlayers, function(a, b)
+        return a.distance < b.distance
+    end)
+    
     -- Combine into a single list while keeping track of categories
     nearestItems = {
         valuables = nearestValuables,
-        enemies = nearestEnemies
+        enemies = nearestEnemies,
+        players = nearestPlayers -- Add players to the list
     }
     
     -- If targeting is enabled, update the current target
@@ -506,7 +595,7 @@ local function createNearestItemsUI()
     -- Create the main frame
     local mainFrame = Instance.new("Frame")
     mainFrame.Name = "MainFrame"
-    mainFrame.Size = UDim2.new(0, 380, 0, 300) -- Wider and taller for better readability
+    mainFrame.Size = UDim2.new(0, 380, 0, 370) -- Taller to accommodate players section
     mainFrame.Position = UDim2.new(0, 10, 0, 10)
     mainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     mainFrame.BackgroundTransparency = 0.2 -- More opaque background
@@ -592,11 +681,43 @@ local function createNearestItemsUI()
         enemyLabel.Parent = mainFrame
     end
     
+    -- Create players section label
+    local playersLabel = Instance.new("TextLabel")
+    playersLabel.Name = "PlayersLabel"
+    playersLabel.Size = UDim2.new(1, 0, 0, 35)
+    playersLabel.Position = UDim2.new(0, 0, 0, 295)
+    playersLabel.BackgroundColor3 = Color3.fromRGB(0, 180, 0) -- Green for players
+    playersLabel.BackgroundTransparency = 0.1
+    playersLabel.BorderSizePixel = 0
+    playersLabel.Font = Enum.Font.SourceSansBold
+    playersLabel.TextSize = 20 -- Larger text
+    playersLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    playersLabel.Text = "Other Players"
+    playersLabel.Parent = mainFrame
+    
+    -- Create labels for the nearest players
+    for i = 1, 3 do
+        local playerLabel = Instance.new("TextLabel")
+        playerLabel.Name = "Player" .. i
+        playerLabel.Size = UDim2.new(1, 0, 0, 30) -- Taller
+        playerLabel.Position = UDim2.new(0, 0, 0, 330 + (i - 1) * 30)
+        playerLabel.BackgroundTransparency = 0.7
+        playerLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+        playerLabel.Font = Enum.Font.SourceSansBold
+        playerLabel.TextSize = 19 -- Larger text
+        playerLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        playerLabel.TextXAlignment = Enum.TextXAlignment.Left
+        playerLabel.Text = "  " .. i .. ". No players nearby"
+        playerLabel.TextStrokeTransparency = 0.7 -- Add text stroke for better visibility
+        playerLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        playerLabel.Parent = mainFrame
+    end
+    
     -- Create aimbot status label
     local aimbotLabel = Instance.new("TextLabel")
     aimbotLabel.Name = "AimbotStatus"
     aimbotLabel.Size = UDim2.new(1, 0, 0, 35)
-    aimbotLabel.Position = UDim2.new(0, 0, 0, 265) -- Adjusted position
+    aimbotLabel.Position = UDim2.new(0, 0, 0, 425) -- Adjusted position
     aimbotLabel.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
     aimbotLabel.BackgroundTransparency = 0.1 -- More opaque
     aimbotLabel.BorderSizePixel = 2
@@ -616,6 +737,9 @@ local function createNearestItemsUI()
         enemy1 = mainFrame.Enemy1,
         enemy2 = mainFrame.Enemy2,
         enemy3 = mainFrame.Enemy3,
+        player1 = mainFrame.Player1,
+        player2 = mainFrame.Player2,
+        player3 = mainFrame.Player3,
         aimbotStatus = mainFrame.AimbotStatus
     }
 end
@@ -667,6 +791,20 @@ local function updateNearestItemsUI(ui)
         end
     end
     
+    -- Update player items
+    for i = 1, 3 do
+        if nearestItems.players[i] then
+            local item = nearestItems.players[i]
+            local distanceRounded = math.floor(item.distance * 10) / 10
+            
+            ui["player" .. i].Text = "  " .. i .. ". " .. item.name .. " (" .. distanceRounded .. " studs)"
+            ui["player" .. i].TextColor3 = Color3.fromRGB(80, 255, 80) -- Bright green for players
+        else
+            ui["player" .. i].Text = "  " .. i .. ". No players nearby"
+            ui["player" .. i].TextColor3 = Color3.fromRGB(220, 220, 220) -- Brighter text for better visibility
+        end
+    end
+    
     if targetingEnabled then
         local targetText = "Aimbot: ON"
         if currentTarget then
@@ -681,6 +819,42 @@ local function updateNearestItemsUI(ui)
         ui.aimbotStatus.Text = "Aimbot: OFF"
         ui.aimbotStatus.BackgroundColor3 = Color3.fromRGB(200, 0, 0) -- Brighter red
     end
+end
+
+-- Set up input handling for aimbot
+local function setupInputHandling()
+    -- Clear any existing connections
+    if _G.inputConnections then
+        for _, connection in pairs(_G.inputConnections) do
+            connection:Disconnect()
+        end
+    end
+    
+    _G.inputConnections = {}
+    
+    local beginConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        if input.KeyCode == TARGET_KEY then
+            targetingEnabled = true
+            debugPrint("Aimbot enabled - Q key pressed")
+        end
+    end)
+    
+    local endConnection = UserInputService.InputEnded:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        if input.KeyCode == TARGET_KEY then
+            targetingEnabled = false
+            currentTarget = nil
+            debugPrint("Aimbot disabled - Q key released")
+        end
+    end)
+    
+    table.insert(_G.inputConnections, beginConnection)
+    table.insert(_G.inputConnections, endConnection)
+    
+    debugPrint("Input handling set up successfully")
 end
 
 -- Wait for player to load
@@ -701,34 +875,33 @@ local ui = createNearestItemsUI()
 ui.screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 
 -- Set up input handling for aimbot
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    
-    if input.KeyCode == TARGET_KEY then
-        targetingEnabled = true
-        debugPrint("Aimbot enabled")
-    end
-end)
+setupInputHandling()
 
-UserInputService.InputEnded:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    
-    if input.KeyCode == TARGET_KEY then
-        targetingEnabled = false
-        currentTarget = nil
-        debugPrint("Aimbot disabled")
-    end
-end)
-
--- Main update loop for highlighting items and updating UI
+-- Add a key press checker to the main loop to ensure input detection
+-- sometimes Roblox input events can be unreliable
 RunService.Heartbeat:Connect(function()
     local success, error = pcall(function()
+        -- Manual check for key press as a backup
+        if UserInputService:IsKeyDown(TARGET_KEY) and not targetingEnabled then
+            targetingEnabled = true
+            debugPrint("Aimbot enabled via manual key check")
+        elseif not UserInputService:IsKeyDown(TARGET_KEY) and targetingEnabled then
+            targetingEnabled = false
+            currentTarget = nil
+            debugPrint("Aimbot disabled via manual key check")
+        end
+        
         scanItems()
         updateNearestItemsUI(ui)
     end)
     
     if not success then
         debugPrint("Error in update loop: " .. tostring(error))
+        
+        -- If we encounter an error, try to re-setup the input handling
+        pcall(function()
+            setupInputHandling()
+        end)
     end
 end)
 
@@ -736,6 +909,18 @@ end)
 game.DescendantRemoving:Connect(function(instance)
     if highlightedItems[instance] then
         removeHighlight(instance)
+    end
+end)
+
+-- Check input setup every 10 seconds as a failsafe
+spawn(function()
+    while wait(10) do
+        pcall(function()
+            if #_G.inputConnections < 2 then
+                debugPrint("Input connections lost, recreating...")
+                setupInputHandling()
+            end
+        end)
     end
 end)
 
