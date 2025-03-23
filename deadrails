@@ -817,125 +817,22 @@ local function updateNearestItemsUI(ui)
     end
 end
 
--- Set up input handling for aimbot
+-- SIMPLIFIED input handling for aimbot
 local function setupInputHandling()
-    -- Clear any existing connections
-    if _G.inputConnections then
-        for _, connection in pairs(_G.inputConnections) do
-            pcall(function() connection:Disconnect() end)
-        end
-    end
-    
-    _G.inputConnections = {}
-    _G.lastInputCheck = tick()
-    
-    -- Create a metatable for UserInputService to ensure we always get the latest state
-    local UIS = setmetatable({}, {
-        __index = function(_, key)
-            return UserInputService[key]
-        end
-    })
-    
-    -- Multi-method approach to handle input to increase reliability
-    local beginConnection = UIS.InputBegan:Connect(function(input, gameProcessed)
-        -- Don't return if gameProcessed is true, as we want to capture all Q presses
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if input.KeyCode == TARGET_KEY or input.KeyCode == ALTERNATIVE_KEY then
             targetingEnabled = true
-            _G.lastInputCheck = tick()
-            debugPrint("Aimbot enabled - Key pressed (InputBegan): " .. tostring(input.KeyCode))
+            debugPrint("Aimbot enabled")
         end
     end)
     
-    local endConnection = UIS.InputEnded:Connect(function(input, gameProcessed)
-        -- Don't return if gameProcessed is true, as we want to capture all Q releases
+    UserInputService.InputEnded:Connect(function(input, gameProcessed)
         if input.KeyCode == TARGET_KEY or input.KeyCode == ALTERNATIVE_KEY then
             targetingEnabled = false
             currentTarget = nil
-            _G.lastInputCheck = tick()
-            debugPrint("Aimbot disabled - Key released (InputEnded): " .. tostring(input.KeyCode))
+            debugPrint("Aimbot disabled")
         end
     end)
-    
-    -- Additional UIS events for redundancy
-    local changed = UIS.InputChanged:Connect(function(input, gameProcessed)
-        -- Don't return if gameProcessed is true
-        if input.KeyCode == TARGET_KEY or input.KeyCode == ALTERNATIVE_KEY then
-            local isDown = input.UserInputState == Enum.UserInputState.Begin
-            if isDown ~= targetingEnabled then
-                targetingEnabled = isDown
-                if not isDown then currentTarget = nil end
-                _G.lastInputCheck = tick()
-                debugPrint("Aimbot " .. (isDown and "enabled" or "disabled") .. " - Key " .. (isDown and "pressed" or "released") .. " (InputChanged): " .. tostring(input.KeyCode))
-            end
-        end
-    end)
-    
-    -- Backup check function with more frequent checks
-    local function checkKeyState()
-        while wait(0.01) do -- Much more frequent check (10ms intervals)
-            -- Try multiple methods to detect key state
-            local isPrimaryKeyDown = UIS:IsKeyDown(TARGET_KEY)
-            local isAltKeyDown = UIS:IsKeyDown(ALTERNATIVE_KEY)
-            local isAnyKeyDown = isPrimaryKeyDown or isAltKeyDown
-            
-            -- Also check GetKeysPressed() for redundancy
-            local keysPressed = UIS:GetKeysPressed()
-            for _, key in ipairs(keysPressed) do
-                if key.KeyCode == TARGET_KEY or key.KeyCode == ALTERNATIVE_KEY then
-                    isAnyKeyDown = true
-                    break
-                end
-            end
-            
-            if isAnyKeyDown ~= targetingEnabled then
-                local keyName = isPrimaryKeyDown and "Q" or "E"
-                targetingEnabled = isAnyKeyDown
-                if not isAnyKeyDown then currentTarget = nil end
-                debugPrint("Aimbot " .. (isAnyKeyDown and "enabled" or "disabled") .. " - " .. keyName .. " key " .. (isAnyKeyDown and "pressed" or "released") .. " (Continuous Check)")
-            end
-            
-            -- If targeting is enabled, ensure we update the camera
-            if targetingEnabled and currentTarget then
-                updateCamera()
-            end
-        end
-    end
-    
-    table.insert(_G.inputConnections, beginConnection)
-    table.insert(_G.inputConnections, endConnection)
-    table.insert(_G.inputConnections, changed)
-    
-    -- Start the backup check thread with higher priority
-    spawn(checkKeyState)
-    
-    -- Create and bind key objects for direct checking
-    _G.targetKey = TARGET_KEY
-    _G.alternativeKey = ALTERNATIVE_KEY
-    
-    -- Set up direct mouse event listeners for additional redundancy
-    local mouseDown = UIS.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            if input.KeyCode == TARGET_KEY or input.KeyCode == ALTERNATIVE_KEY then
-                targetingEnabled = true
-                debugPrint("Aimbot enabled via direct keyboard event")
-            end
-        end
-    end)
-    
-    local mouseUp = UIS.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            if input.KeyCode == TARGET_KEY or input.KeyCode == ALTERNATIVE_KEY then
-                targetingEnabled = false
-                currentTarget = nil
-                debugPrint("Aimbot disabled via direct keyboard event")
-            end
-        end
-    end)
-    
-    table.insert(_G.inputConnections, mouseDown)
-    table.insert(_G.inputConnections, mouseUp)
-    
-    debugPrint("Enhanced input handling set up successfully with redundant methods")
 end
 
 -- Wait for player to load
@@ -958,57 +855,28 @@ ui.screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 -- Set up input handling for aimbot
 setupInputHandling()
 
--- Add a key press checker to the main loop to ensure input detection
--- sometimes Roblox input events can be unreliable
+-- Main update loop
 RunService.Heartbeat:Connect(function()
-    local success, error = pcall(function()
-        -- Multiple checks for key press as a backup (force check regardless of previous state)
-        -- Method 1: Direct IsKeyDown check
-        local isPrimaryKeyDown = UserInputService:IsKeyDown(TARGET_KEY)
-        local isAltKeyDown = UserInputService:IsKeyDown(ALTERNATIVE_KEY)
-        
-        -- Method 2: Check using GetKeysPressed
-        local isPressed = false
-        local keys = UserInputService:GetKeysPressed()
-        for _, key in pairs(keys) do
-            if key.KeyCode == TARGET_KEY or key.KeyCode == ALTERNATIVE_KEY then
-                isPressed = true
-                break
-            end
+    scanItems()
+    
+    -- Direct key check as a backup - Roblox's input system can be unreliable
+    local isKeyDown = UserInputService:IsKeyDown(TARGET_KEY) or UserInputService:IsKeyDown(ALTERNATIVE_KEY)
+    if isKeyDown ~= targetingEnabled then
+        targetingEnabled = isKeyDown
+        if not isKeyDown then
+            currentTarget = nil
         end
-        
-        -- Method 3: Check keyboard state directly
-        local keyboardState = UserInputService.KeyboardEnabled and (isPrimaryKeyDown or isAltKeyDown)
-        
-        -- Use all methods to determine if key is pressed
-        local finalKeyState = isPrimaryKeyDown or isAltKeyDown or isPressed or keyboardState
-        
-        -- Always update the targeting state, don't skip if the state is the same
-        targetingEnabled = finalKeyState
-        if not finalKeyState then currentTarget = nil end
-        
-        -- If targeting is enabled, make sure we're actually targeting something
-        if targetingEnabled and not currentTarget then
+    end
+    
+    -- If targeting is enabled, always try to find a target
+    if targetingEnabled then
+        if not currentTarget then
             currentTarget = findNearestEnemyHead()
         end
-        
-        -- Always update camera if targeting is enabled
-        if targetingEnabled and currentTarget then
-            updateCamera()
-        end
-        
-        scanItems()
-        updateNearestItemsUI(ui)
-    end)
-    
-    if not success then
-        debugPrint("Error in update loop: " .. tostring(error))
-        
-        -- If we encounter an error, try to re-setup the input handling
-        pcall(function()
-            setupInputHandling()
-        end)
+        updateCamera()
     end
+    
+    updateNearestItemsUI(ui)
 end)
 
 -- Clean up highlights when items are removed
